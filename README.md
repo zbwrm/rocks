@@ -1,0 +1,2 @@
+# rocks
+Terminal dice-roller.
