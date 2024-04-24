@@ -2,53 +2,94 @@ use clap::builder::{Arg, ArgGroup};
 use clap::Command;
 use rand::rngs::ThreadRng;
 use rand::Rng;
-use std::process;
 
-const CONTROL_CHARS: &[char] = &['d', '>'];
+// TODO: implement two-char control sequences
+// for >=, <=, !=
+//
+// TODO: implement parens "()"
+// TODO: implement brackets for macro names "[]"
+// needs more design work -- how do
+const CONTROL_CHARS: &[char] = &['d', '>', '<', '-', '+', '='];
 
-struct Die {
-    num: usize,
-    sides: u16,
+#[derive(Debug, Clone, Copy)]
+enum Chunk {
+    Op(char),
+    Num(u32),
 }
 
-impl Die {
-    fn new(num: usize, sides: u16) -> Die {
-        Die { num, sides }
-    }
+impl TryFrom<char> for Chunk {
+    type Error = &'static str;
 
-    fn roll(self, rng: &mut ThreadRng) -> Vec<u16> {
-        let mut rolls = Vec::with_capacity(self.num);
-
-        for _ in 0..self.num {
-            rolls.push(rng.gen::<u16>() % self.sides);
+    fn try_from(c: char) -> Result<Self, &'static str> {
+        match c {
+            _ if CONTROL_CHARS.contains(&c) => Ok(Chunk::Op(c)),
+            _ if c.is_ascii_digit() => Ok(Chunk::Num(c.to_digit(10).unwrap())),
+            _ => Err("not a valid character"),
         }
-
-        rolls
     }
 }
 
-fn parse_dice(dice: &str, operators: &[char]) -> Vec<String> {
-    // TODO: associate operators with their values
-    // i.e. "2d6" -> "2","d6" not "2d","6"
-    // use https://crates.io/crates/str_splitter?
-    dice.split_inclusive(operators)
-        .map(str::to_string)
-        .collect()
+fn process_char(
+    c: char,
+    expression: &mut Vec<Chunk>,
+    rng: &mut ThreadRng,
+) -> Result<(), &'static str> {
+    let curr_chunk = Chunk::try_from(c).expect("invalid character: {c}");
+    let expression_top = expression.last().cloned();
+    match (curr_chunk, expression_top) {
+        (Chunk::Op(_), None) => Err("tried to add operator to empty expression"),
+        (Chunk::Op(_), Some(Chunk::Op(_))) => Err("tried to push two operators to the expression"), // TODO: implement operator merging
+        (Chunk::Num(_), Some(Chunk::Op(_))) | (Chunk::Num(_), None) => {
+            expression.push(curr_chunk);
+            Ok(())
+        }
+        (Chunk::Num(n1), Some(Chunk::Num(n10))) => {
+            let _ = expression.pop();
+            expression.push(Chunk::Num(n10 * 10 + n1));
+            Ok(())
+        }
+        (Chunk::Op(_), Some(Chunk::Num(_))) => {
+            let result = evaluate(expression, rng)?;
+            expression.clear();
+            expression.push(Chunk::Num(result));
+            expression.push(curr_chunk);
+            Ok(())
+        }
+    }
 }
 
-fn main() {
+fn evaluate(expression: &[Chunk], rng: &mut ThreadRng) -> Result<u32, &'static str> {
+    match expression {
+        [Chunk::Num(n)] => Ok(*n),
+        [Chunk::Num(n1), Chunk::Op(c), Chunk::Num(n2)] => {
+            println!("{n1} {c} {n2}");
+            match c {
+                'd' => Ok((0..*n1).fold::<u32, _>(0, |s, _| s + ((rng.gen::<u32>() % n2) + 1))),
+                '+' => Ok(n1 + n2),
+                '-' => {
+                    if n2 > n1 {
+                        Ok(0)
+                    } else {
+                        Ok(n1 - n2)
+                    }
+                }
+                '=' => Ok(if n1 == n2 { 1 } else { 0 }),
+                '>' => Ok(if n1 > n2 { 1 } else { 0 }),
+                '<' => Ok(if n1 < n2 { 1 } else { 0 }),
+                _ => Err("unimplemented control char snuck through: {c}"),
+            }
+        }
+        _ => Err("malformed expression: {expression}"),
+    }
+}
+
+fn main() -> Result<(), &'static str> {
     let m = Command::new("rx")
         .about("Rolls dice.")
         .arg(
-            Arg::new("individual")
-                .short('i')
-                .help("Rolls dice individually")
-                .num_args(0),
-        )
-        .arg(
-            Arg::new("sum")
-                .short('s')
-                .help("Sums rolled dice to one value")
+            Arg::new("dice")
+                .short('d')
+                .help("Sums rolled dice to one value. Check README for syntax.")
                 .num_args(0),
         )
         .arg(
@@ -57,10 +98,16 @@ fn main() {
                 .help("Rolls on a user-defined macro [NOT IMPLEMENTED YET]")
                 .num_args(0),
         )
+        .arg(
+            Arg::new("table")
+                .short('t')
+                .help("Rolls on a user-defined table [NOT IMPLEMENTED YET]")
+                .num_args(0),
+        )
         .group(
             ArgGroup::new("mode")
                 .id("mode")
-                .args(["individual", "sum", "macro"])
+                .args(["dice", "macro", "table"])
                 .required(true),
         )
         .arg(
@@ -73,43 +120,32 @@ fn main() {
                 .value_parser(clap::value_parser!(u16)),
         )
         .arg(
-            Arg::new("dice")
-                .help("Dice (see readme for syntax)")
+            Arg::new("args")
+                .help("Arguments: either a dice-string or the name of a table/macro")
                 .value_parser(clap::builder::NonEmptyStringValueParser::new())
                 .required(true),
         )
         .get_matches();
 
-    // println!("{:#?}", m);
-    if m.get_flag("macro") {
-        println!("oops not implemented yet");
-        process::exit(1);
+    if m.get_flag("macro") || m.get_flag("table") {
+        todo!()
     }
 
-    let dice: &String = m.get_one("dice").expect("default");
-    let mut chunks = parse_dice(dice, CONTROL_CHARS);
-    chunks.reverse(); // so push/pop work as expected
-
+    let dice: &String = m.get_one::<String>("args").expect("default");
+    let feed = dice.chars();
     let mut rng = rand::thread_rng();
+    let mut expression = Vec::<Chunk>::new();
 
-    while let Some(chunk) = chunks.pop() {
-        println!("{}", chunk);
+    for i in 1..(*m.get_one::<u16>("rolls").unwrap() + 1) {
+        for c in feed.clone() {
+            match process_char(c, &mut expression, &mut rng) {
+                Ok(()) => continue,
+                Err(e) => eprintln!("{e}"),
+            }
+        }
+        let result = evaluate(&expression, &mut rng)?;
+        println!("result no.{i}: {result}");
+        expression.clear();
     }
-
-    // loop {
-    //     // will contain parser logic until refactored ?
-    //     match chunks.pop() {
-    //         Some(chunk) => {
-    //             match chunk.pop() {
-    //                 Some(char) => {
-    //                     match char
-    //                 }
-
-    //             }
-    //         }
-    //         None => {
-    //             break;
-    //         }
-    //     }
-    // }
+    Ok(())
 }
