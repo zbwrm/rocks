@@ -1,34 +1,47 @@
-use std::iter::Peekable;
+use std::ops::Deref;
+use std::{convert::Infallible, iter::Peekable, mem, ops::Index};
 
 use thiserror::Error;
 
 #[derive(Debug, Clone)]
-enum TokenType {
-    // number literal
-    Number(usize),
-
-    // dice expressions
-    Dice,
+enum DiceFilterType {
     KeepHighest,
     KeepLowest,
     DropHighest,
     DropLowest,
+}
 
-    // math expressions
+#[derive(Debug, Clone)]
+enum AdditionOperator {
     Plus,
     Minus,
-    Times,
-    Divide,
-    LeftParen,
-    RightParen,
+}
 
-    // equality expression
+#[derive(Debug, Clone)]
+enum MathOperator {
+    Add(AdditionOperator),
+    Times,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ComparisonOperator {
     Equals,
     NotEquals,
     Greater,
     GreaterEquals,
     Less,
     LessEquals,
+}
+
+#[derive(Debug, Clone)]
+enum TokenType {
+    Number(usize),
+    Dice,
+    Df(DiceFilterType),
+    Op(MathOperator),
+    LeftParen,
+    RightParen,
+    Cmp(ComparisonOperator),
 }
 
 #[derive(Debug)]
@@ -38,10 +51,19 @@ struct Token {
     end: usize,
 }
 
+impl Token {
+    fn is_comparison_operator(&self) -> bool {
+        match self.tokentype {
+            TokenType::Cmp(_) => true,
+            _ => false,
+        }
+    }
+}
+
 #[derive(Error, Debug)]
 enum LexError {
-    #[error("invalid character: {0} at char #{1}")]
-    InvalidCharacter(char, usize),
+    #[error("invalid character: '{character}' at position {loc}")]
+    InvalidCharacter { character: char, loc: usize },
 }
 
 #[derive(Debug)]
@@ -67,6 +89,14 @@ impl LexedExpression {
             start,
             end,
         })
+    }
+}
+
+impl Index<usize> for LexedExpression {
+    type Output = Token;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.0[index]
     }
 }
 
@@ -98,7 +128,7 @@ impl TryFrom<&str> for LexedExpression {
                 }
                 ('!', Some((i2, '='))) => {
                     tokens.push(Token {
-                        tokentype: TokenType::NotEquals,
+                        tokentype: TokenType::Cmp(ComparisonOperator::NotEquals),
                         start: i,
                         end: i2.clone(),
                     });
@@ -106,7 +136,7 @@ impl TryFrom<&str> for LexedExpression {
                 }
                 ('>', Some((i2, '='))) => {
                     tokens.push(Token {
-                        tokentype: TokenType::GreaterEquals,
+                        tokentype: TokenType::Cmp(ComparisonOperator::GreaterEquals),
                         start: i,
                         end: *i2,
                     });
@@ -114,7 +144,7 @@ impl TryFrom<&str> for LexedExpression {
                 }
                 ('<', Some((i2, '='))) => {
                     tokens.push(Token {
-                        tokentype: TokenType::LessEquals,
+                        tokentype: TokenType::Cmp(ComparisonOperator::LessEquals),
                         start: i,
                         end: *i2,
                     });
@@ -122,7 +152,7 @@ impl TryFrom<&str> for LexedExpression {
                 }
                 ('k', Some((i2, 'h'))) => {
                     tokens.push(Token {
-                        tokentype: TokenType::KeepHighest,
+                        tokentype: TokenType::Df(DiceFilterType::KeepHighest),
                         start: i,
                         end: *i2,
                     });
@@ -130,7 +160,7 @@ impl TryFrom<&str> for LexedExpression {
                 }
                 ('k', Some((i2, 'l'))) => {
                     tokens.push(Token {
-                        tokentype: TokenType::KeepLowest,
+                        tokentype: TokenType::Df(DiceFilterType::KeepLowest),
                         start: i,
                         end: *i2,
                     });
@@ -138,7 +168,7 @@ impl TryFrom<&str> for LexedExpression {
                 }
                 ('d', Some((i2, 'h'))) => {
                     tokens.push(Token {
-                        tokentype: TokenType::DropHighest,
+                        tokentype: TokenType::Df(DiceFilterType::DropHighest),
                         start: i,
                         end: *i2,
                     });
@@ -146,7 +176,7 @@ impl TryFrom<&str> for LexedExpression {
                 }
                 ('d', Some((i2, 'l'))) => {
                     tokens.push(Token {
-                        tokentype: TokenType::DropLowest,
+                        tokentype: TokenType::Df(DiceFilterType::DropLowest),
                         start: i,
                         end: *i2,
                     });
@@ -158,37 +188,32 @@ impl TryFrom<&str> for LexedExpression {
                     end: i,
                 }),
                 ('=', _) => tokens.push(Token {
-                    tokentype: TokenType::Equals,
+                    tokentype: TokenType::Cmp(ComparisonOperator::Equals),
                     start: i,
                     end: i,
                 }),
                 ('>', _) => tokens.push(Token {
-                    tokentype: TokenType::Greater,
+                    tokentype: TokenType::Cmp(ComparisonOperator::Greater),
                     start: i,
                     end: i,
                 }),
                 ('<', _) => tokens.push(Token {
-                    tokentype: TokenType::Less,
+                    tokentype: TokenType::Cmp(ComparisonOperator::Less),
                     start: i,
                     end: i,
                 }),
                 ('+', _) => tokens.push(Token {
-                    tokentype: TokenType::Plus,
+                    tokentype: TokenType::Op(MathOperator::Add(AdditionOperator::Plus)),
                     start: i,
                     end: i,
                 }),
                 ('-', _) => tokens.push(Token {
-                    tokentype: TokenType::Minus,
+                    tokentype: TokenType::Op(MathOperator::Add(AdditionOperator::Minus)),
                     start: i,
                     end: i,
                 }),
                 ('*', _) => tokens.push(Token {
-                    tokentype: TokenType::Times,
-                    start: i,
-                    end: i,
-                }),
-                ('/', _) => tokens.push(Token {
-                    tokentype: TokenType::Divide,
+                    tokentype: TokenType::Op(MathOperator::Times),
                     start: i,
                     end: i,
                 }),
@@ -202,7 +227,12 @@ impl TryFrom<&str> for LexedExpression {
                     start: i,
                     end: i,
                 }),
-                anything_else => return Err(LexError::InvalidCharacter(anything_else.0, i)),
+                anything_else => {
+                    return Err(LexError::InvalidCharacter {
+                        character: anything_else.0,
+                        loc: i,
+                    })
+                }
             }
         }
 
@@ -210,9 +240,125 @@ impl TryFrom<&str> for LexedExpression {
     }
 }
 
+#[derive(Error, Debug)]
+enum ParseError {
+    #[error("second comparison operator: {location:?}")]
+    ExtraComparisonOperator { location: usize },
+    #[error("Too many math operators: {location:?}")]
+    ConsecutiveAddOperators { location: usize },
+}
+
+struct BinOp {
+    lhs: ValueExpr,
+    rhs: ValueExpr,
+}
+
+struct MathExpression {
+    operator: MathOperator,
+    sides: BinOp,
+}
+
+struct DiceFilter {
+    df_type: DiceFilterType,
+    num: usize,
+}
+
+struct DiceExpression {
+    dice: usize,
+    sides: usize,
+    filter: Option<DiceFilter>,
+}
+
+enum ValueExpr {
+    Math(Box<MathExpression>),
+    Paren(Box<ValueExpr>),
+    Dice(Box<DiceExpression>),
+    Lit(usize),
+}
+
+impl TryFrom<&[Token]> for ValueExpr {
+    type Error = ParseError;
+
+    fn try_from(expr_slice: &[Token]) -> Result<Self, Self::Error> {
+        todo!();
+        for tok in expr_slice {
+            println!("{:#?}", tok);
+        }
+        return Err(ParseError::ConsecutiveAddOperators { location: 0 });
+        // return Ok(ValueExpr::Lit(0));
+    }
+}
+
+struct ComparisonExpr {
+    operator: ComparisonOperator,
+    sides: BinOp,
+}
+
+enum ParsedExpr {
+    Cmp(ComparisonExpr),
+    Val(ValueExpr),
+}
+
+impl TryFrom<LexedExpression> for ParsedExpr {
+    type Error = ParseError;
+
+    fn try_from(expr: LexedExpression) -> Result<ParsedExpr, ParseError> {
+        let parsed_expression: ParsedExpr;
+        // first layer: comparison expression
+        // get index of first comparison operator, error otherwise
+        let mut is_comparison_expression: bool = false;
+        let mut comparison_token_index: Option<usize> = None;
+        for (idx, tok) in expr.0.iter().enumerate() {
+            match (tok.is_comparison_operator(), is_comparison_expression) {
+                (true, false) => {
+                    is_comparison_expression = true;
+                    comparison_token_index = Some(idx);
+                }
+                (true, true) => {
+                    return Err(ParseError::ExtraComparisonOperator {
+                        location: tok.start,
+                    });
+                }
+                (false, _) => {}
+            }
+        }
+        match (is_comparison_expression, comparison_token_index) {
+            (true, Some(cmp_idx)) => {
+                let rhs = ValueExpr::try_from(&expr.0[cmp_idx + 1..])?;
+                let lhs = ValueExpr::try_from(&expr.0[0..cmp_idx])?;
+
+                let comparison = ComparisonExpr {
+                    operator: if let TokenType::Cmp(op) = expr[cmp_idx].tokentype {
+                        op
+                    } else {
+                        // occurs if comparison_token_index is not actually a comparison token
+                        unreachable!();
+                    },
+                    sides: BinOp { lhs, rhs },
+                };
+
+                parsed_expression = ParsedExpr::Cmp(comparison);
+            }
+            (true, None) => {
+                // occurs when expression is determined to be a comparison expression
+                // but no index is given; should never happen as both are defined
+                // at the same time
+                unreachable!()
+            }
+            (false, _) => {
+                let value_expr = ValueExpr::try_from(expr.0.deref())?;
+                parsed_expression = ParsedExpr::Val(value_expr);
+            }
+        }
+
+        Ok(parsed_expression)
+    }
+}
+
 fn main() {
-    let dice_expr = "20d6kl2+5>=10";
-    let tokens = LexedExpression::try_from(dice_expr);
+    let dice_expr = "20d6kl2+50=20";
     println!("{:#?}", dice_expr);
+    let tokens = LexedExpression::try_from(dice_expr).unwrap();
     println!("{:#?}", tokens);
+    let pexpr = ParsedExpr::try_from(tokens);
 }
